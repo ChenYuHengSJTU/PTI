@@ -5,6 +5,10 @@ import os
 from tqdm import tqdm
 from utils.alignment import align_face
 
+import multiprocessing as mp
+from tqdm import tqdm
+
+raw_images_path='/home_new/chenyuheng/ffhq512/512/'
 
 def pre_process_images(raw_images_path):
     current_directory = os.getcwd()
@@ -32,4 +36,4 @@ def pre_process_images(raw_images_path):
 
 
 if __name__ == "__main__":
-    pre_process_images('')
+    pre_process_images('/home_new/chenyuheng/ffhq512/512/')

@@ -48,13 +48,17 @@ def project(
 
     # Compute w stats.
     logprint(f'Computing W midpoint and stddev using {w_avg_samples} samples...')
+
+    # ndarray of shape(w_avg_samples, z_dim)
     z_samples = np.random.RandomState(123).randn(w_avg_samples, G.z_dim)
+
     w_samples = G.mapping(torch.from_numpy(z_samples).to(device), None)  # [N, L, C]
     w_samples = w_samples[:, :1, :].cpu().numpy().astype(np.float32)  # [N, 1, C]
     w_avg = np.mean(w_samples, axis=0, keepdims=True)  # [1, 1, C]
     w_avg_tensor = torch.from_numpy(w_avg).to(global_config.device)
     w_std = (np.sum((w_samples - w_avg) ** 2) / w_avg_samples) ** 0.5
 
+    # default using w_avg
     start_w = initial_w if initial_w is not None else w_avg
 
     # Setup noise inputs.
@@ -63,6 +67,7 @@ def project(
     # Load VGG16 feature detector.
     url = 'https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/metrics/vgg16.pt'
     with dnnlib.util.open_url(url) as f:
+        # 
         vgg16 = torch.jit.load(f).eval().to(device)
 
     # Features for target image.
@@ -85,38 +90,52 @@ def project(
 
         # Learning rate schedule.
         t = step / num_steps
+        # in the first 3/4 iterations, add Gaussian noise to w
         w_noise_scale = w_std * initial_noise_factor * max(0.0, 1.0 - t / noise_ramp_length) ** 2
+        
+        # adjust the learning rate: first 50 iters linearly and a cosine schedule the last 250 iters
         lr_ramp = min(1.0, (1.0 - t) / lr_rampdown_length)
         lr_ramp = 0.5 - 0.5 * np.cos(lr_ramp * np.pi)
         lr_ramp = lr_ramp * min(1.0, t / lr_rampup_length)
         lr = initial_learning_rate * lr_ramp
+
         for param_group in optimizer.param_groups:
             param_group['lr'] = lr
 
         # Synth images from opt_w.
+        # get $$\widetilde{w}$$ from w by adding noise sampled from Gaussian
         w_noise = torch.randn_like(w_opt) * w_noise_scale
+
         ws = (w_opt + w_noise).repeat([1, G.mapping.num_ws, 1])
         synth_images = G.synthesis(ws, noise_mode='const', force_fp32=True)
 
         # Downsample image to 256x256 if it's larger than that. VGG was built for 224x224 images.
+        # is the output the tensor format of a picture?
         synth_images = (synth_images + 1) * (255 / 2)
+
         if synth_images.shape[2] > 256:
+            # difference between resize?
             synth_images = F.interpolate(synth_images, size=(256, 256), mode='area')
 
         # Features for synth images.
         synth_features = vgg16(synth_images, resize_images=False, return_lpips=True)
+        # check this 
         dist = (target_features - synth_features).square().sum()
 
         # Noise regularization.
         reg_loss = 0.0
+        # sum i which is the original size of noises
         for v in noise_bufs.values():
             noise = v[None, None, :, :]  # must be [1,1,H,W] for F.avg_pool2d()
+            # sum j which is the resized size of a single noise uutil it is smaller than 8*8
             while True:
+                # roll operation
                 reg_loss += (noise * torch.roll(noise, shifts=1, dims=3)).mean() ** 2
                 reg_loss += (noise * torch.roll(noise, shifts=1, dims=2)).mean() ** 2
                 if noise.shape[2] <= 8:
                     break
                 noise = F.avg_pool2d(noise, kernel_size=2)
+
         loss = dist + reg_loss * regularize_noise_weight
 
         if step % image_log_step == 0:

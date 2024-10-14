@@ -35,6 +35,7 @@ class SingleIDCoach(BaseCoach):
             if hyperparameters.use_last_w_pivots:
                 w_pivot = self.load_inversions(w_path_dir, image_name)
 
+            # calc_inversion method put forward in stylegan2 paper
             elif not hyperparameters.use_last_w_pivots or w_pivot is None:
                 w_pivot = self.calc_inversions(image, image_name)
 
